@@ -5,102 +5,118 @@ use crate::{
     },
     services::UserService,
 };
-use actix_web::{HttpResponse, Responder, get, post, web};
-use serde_json::json;
+use axum::{
+    Router,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Json, Response},
+    routing::{get, post},
+};
+use serde_json::{Value, json};
+use std::sync::Arc;
 
-#[get("/healthchecker")]
-async fn health_checker_handler() -> impl Responder {
+async fn health_checker_handler() -> Json<Value> {
     const MESSAGE: &str = "How to Implement Two-Factor Authentication (2FA) in Rust";
 
-    HttpResponse::Ok().json(json!({"status": "success", "message": MESSAGE}))
+    Json(json!({"status": "success", "message": MESSAGE}))
 }
 
-#[post("/auth/register")]
 async fn register_user_handler(
-    body: web::Json<UserRegisterSchema>,
-    data: web::Data<AppState>,
-) -> impl Responder {
+    State(data): State<Arc<AppState>>,
+    Json(body): Json<UserRegisterSchema>,
+) -> Response {
     match UserService::register_user(&body, &data).await {
-        Ok(message) => HttpResponse::Ok().json(json!({"status": "success", "message": message})),
-        Err(error_response) => error_response,
+        Ok(message) => {
+            let response = json!({"status": "success", "message": message});
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Err(error) => error.into_response(),
     }
 }
 
-#[post("/auth/login")]
 async fn login_user_handler(
-    body: web::Json<UserLoginSchema>,
-    data: web::Data<AppState>,
-) -> impl Responder {
+    State(data): State<Arc<AppState>>,
+    Json(body): Json<UserLoginSchema>,
+) -> Response {
     match UserService::login_user(&body, &data).await {
-        Ok(user_response) => HttpResponse::Ok().json(user_response),
-        Err(error_response) => HttpResponse::InternalServerError().json(json!({
-            "error": error_response.to_string()
-        })),
+        Ok(user_response) => (StatusCode::OK, Json(user_response)).into_response(),
+        Err(error_response) => {
+            let response = json!({
+                "error": error_response.to_string()
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(response)).into_response()
+        }
     }
 }
 
-#[post("/auth/otp/generate")]
 async fn generate_otp_handler(
-    body: web::Json<GenerateOTPSchema>,
-    data: web::Data<AppState>,
-) -> impl Responder {
+    State(data): State<Arc<AppState>>,
+    Json(body): Json<GenerateOTPSchema>,
+) -> impl IntoResponse {
     match UserService::generate_otp(&body, &data).await {
-        Ok((base32, otp_auth_url)) => HttpResponse::Ok().json(json!({
-            "base32": base32,
-            "otpauth_url": otp_auth_url
-        })),
-        Err(error_response) => error_response,
+        Ok((base32, otp_auth_url)) => {
+            let response = json!({
+                "base32": base32,
+                "otpauth_url": otp_auth_url
+            });
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Err(error) => error.into_response(),
     }
 }
 
-#[post("/auth/otp/verify")]
 async fn verify_otp_handler(
-    body: web::Json<VerifyOTPSchema>,
-    data: web::Data<AppState>,
-) -> impl Responder {
+    State(data): State<Arc<AppState>>,
+    Json(body): Json<VerifyOTPSchema>,
+) -> Response {
     match UserService::verify_otp(&body, &data).await {
-        Ok(user_data) => HttpResponse::Ok().json(json!({
-            "otp_verified": true,
-            "user": user_data
-        })),
-        Err(error_response) => error_response,
+        Ok(user_data) => {
+            let response = json!({
+                "otp_verified": true,
+                "user": user_data
+            });
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Err(error) => error.into_response(),
     }
 }
 
-#[post("/auth/otp/validate")]
 async fn validate_otp_handler(
-    body: web::Json<VerifyOTPSchema>,
-    data: web::Data<AppState>,
-) -> impl Responder {
+    State(data): State<Arc<AppState>>,
+    Json(body): Json<VerifyOTPSchema>,
+) -> Response {
     match UserService::validate_otp(&body, &data).await {
-        Ok(_) => HttpResponse::Ok().json(json!({"otp_valid": true})),
-        Err(error_response) => error_response,
+        Ok(_) => {
+            let response = json!({"otp_valid": true});
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Err(error) => error.into_response(),
     }
 }
 
-#[post("/auth/otp/disable")]
 async fn disable_otp_handler(
-    body: web::Json<DisableOTPSchema>,
-    data: web::Data<AppState>,
-) -> impl Responder {
+    State(data): State<Arc<AppState>>,
+    Json(body): Json<DisableOTPSchema>,
+) -> Response {
     match UserService::disable_otp(&body, &data).await {
-        Ok(user_data) => HttpResponse::Ok().json(json!({
-            "user": user_data,
-            "otp_disabled": true
-        })),
-        Err(error_response) => error_response,
+        Ok(user_data) => {
+            let response = json!({
+                "user": user_data,
+                "otp_disabled": true
+            });
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Err(error) => error.into_response(),
     }
 }
 
-pub fn config(conf: &mut web::ServiceConfig) {
-    let scope = web::scope("/api")
-        .service(health_checker_handler)
-        .service(register_user_handler)
-        .service(login_user_handler)
-        .service(generate_otp_handler)
-        .service(verify_otp_handler)
-        .service(validate_otp_handler)
-        .service(disable_otp_handler);
-
-    conf.service(scope);
+pub fn create_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/healthchecker", get(health_checker_handler))
+        .route("/api/auth/register", post(register_user_handler))
+        .route("/api/auth/login", post(login_user_handler))
+        .route("/api/auth/otp/generate", post(generate_otp_handler))
+        .route("/api/auth/otp/verify", post(verify_otp_handler))
+        .route("/api/auth/otp/validate", post(validate_otp_handler))
+        .route("/api/auth/otp/disable", post(disable_otp_handler))
 }

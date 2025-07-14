@@ -3,46 +3,41 @@ mod models;
 mod response;
 mod services;
 
-use actix_cors::Cors;
-use actix_web::middleware::Logger;
-use actix_web::{App, HttpServer, http::header, web};
+use axum::Router;
 use models::AppState;
+use std::sync::Arc;
+use tower::ServiceBuilder;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    // if std::env::var_os("RUST_LOG").is_none() {
-    //     std::env::set_var("RUST_LOG", "actix_web=info");
-    // }
-    env_logger::init();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::fmt::init();
 
     let db = AppState::init()
         .await
         .expect("Failed to initialize database");
-    let app_data = web::Data::new(db);
+    let app_state = Arc::new(db);
 
     println!("🚀 Server started successfully");
 
-    HttpServer::new(move || {
-        let cors = Cors::default()
-            .allowed_origin("http://localhost:3000")
-            .allowed_origin("http://localhost:3000/")
-            .allowed_methods(vec!["GET", "POST"])
-            .allowed_headers(vec![
-                header::CONTENT_TYPE,
-                header::AUTHORIZATION,
-                header::ACCEPT,
-            ])
-            .supports_credentials();
+    let cors = CorsLayer::new()
+        .allow_origin("http://localhost:3000".parse::<axum::http::HeaderValue>()?)
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_headers(Any);
 
-        App::new()
-            .app_data(app_data.clone())
-            .configure(api::config)
-            .wrap(cors)
-            .wrap(Logger::default())
-    })
-    .bind(("127.0.0.1", 8000))?
-    .run()
-    .await?;
+    let app = Router::new()
+        .merge(api::create_routes())
+        .layer(
+            ServiceBuilder::new()
+                .layer(TraceLayer::new_for_http())
+                .layer(cors),
+        )
+        .with_state(app_state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8000").await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

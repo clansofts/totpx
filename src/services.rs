@@ -5,47 +5,75 @@ use crate::{
     },
     response::{GenericResponse, UserData, UserResponse},
 };
-use actix_web::{HttpResponse, web};
-use base32;
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Json},
+};
 use chrono::prelude::*;
-use rand::Rng;
-use serde_json::json;
+use std::sync::Arc;
 use surrealdb::{Datetime, Error, opt::auth::Record};
 use totp_rs::{Algorithm, Secret, TOTP};
 use uuid::Uuid;
+
+#[derive(Debug)]
+pub enum ServiceError {
+    DatabaseError(String),
+    UserExists(String),
+    UserNotFound(String),
+    OtpError(String),
+    TokenInvalid(String),
+    InternalError(String),
+}
+
+impl IntoResponse for ServiceError {
+    fn into_response(self) -> axum::response::Response {
+        let (status, message) = match self {
+            ServiceError::DatabaseError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            ServiceError::UserExists(msg) => (StatusCode::CONFLICT, msg),
+            ServiceError::UserNotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            ServiceError::OtpError(msg) => (StatusCode::BAD_REQUEST, msg),
+            ServiceError::TokenInvalid(msg) => (StatusCode::FORBIDDEN, msg),
+            ServiceError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        };
+
+        let error_response = GenericResponse {
+            status: "fail".to_string(),
+            message,
+        };
+
+        (status, Json(error_response)).into_response()
+    }
+}
 
 pub struct UserService;
 
 impl UserService {
     pub async fn register_user(
         body: &UserRegisterSchema,
-        data: &web::Data<AppState>,
-    ) -> Result<String, HttpResponse> {
+        data: &Arc<AppState>,
+    ) -> Result<String, ServiceError> {
         // Get the db
         let db = data.db.clone();
         // Check if user already exists
         let existing_users: Vec<User> = match db.select("mcp_auth").await {
             Ok(users) => users,
             Err(_) => {
-                let error_response = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "Database error occurred".to_string(),
-                };
-                return Err(HttpResponse::InternalServerError().json(error_response));
+                return Err(ServiceError::DatabaseError(
+                    "Database error occurred".to_string(),
+                ));
             }
         };
 
         for user in existing_users.iter() {
             if user.username == body.email.to_lowercase() {
-                let error_response = GenericResponse {
-                    status: "fail".to_string(),
-                    message: format!("User with email: {} already exists", user.username),
-                };
-                return Err(HttpResponse::Conflict().json(error_response));
+                return Err(ServiceError::UserExists(format!(
+                    "User with email: {} already exists",
+                    user.username
+                )));
             }
         }
 
-        let uuid_id = Uuid::new_v4();
+        let _uuid_id = Uuid::new_v4();
         let datetime = Utc::now();
 
         let user = User {
@@ -83,11 +111,9 @@ impl UserService {
         {
             Ok(token) => token.into_insecure_token(),
             Err(_) => {
-                let error_response = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "Failed to signup user".to_string(),
-                };
-                return Err(HttpResponse::InternalServerError().json(error_response));
+                return Err(ServiceError::InternalError(
+                    "Failed to signup user".to_string(),
+                ));
             }
         };
 
@@ -99,7 +125,7 @@ impl UserService {
 
     pub async fn login_user(
         body: &UserLoginSchema,
-        data: &web::Data<AppState>,
+        data: &Arc<AppState>,
     ) -> Result<UserResponse, Error> {
         let db = data.db.clone();
 
@@ -141,111 +167,42 @@ impl UserService {
 
     pub async fn generate_otp(
         body: &GenerateOTPSchema,
-        data: &web::Data<AppState>,
-    ) -> Result<(String, String), HttpResponse> {
-        // Find the user by ID
-        let user: Option<User> = match data.db.select(("mcp_auth", &body.user_id)).await {
-            Ok(user) => user,
-            Err(_) => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "Database error occurred".to_string(),
-                };
-                return Err(HttpResponse::InternalServerError().json(json_error));
-            }
-        };
-
-        let mut user = match user {
-            Some(u) => u,
-            None => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: format!("No user with Id: {} found", body.user_id),
-                };
-                return Err(HttpResponse::NotFound().json(json_error));
-            }
-        };
-
-        let mut rng = rand::rng();
-        let data_byte: [u8; 21] = rng.random();
-        let base32_string =
-            base32::encode(base32::Alphabet::Rfc4648 { padding: false }, &data_byte);
-
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
-            Secret::Encoded(base32_string).to_bytes().unwrap(),
-        )
-        .unwrap();
-
-        let otp_base32 = totp.get_secret_base32();
-        let email = body.email.to_owned();
-        let issuer = "Malipo Popote Solutions";
-        let otp_auth_url =
-            format!("otpauth://totp/{issuer}:{email}?secret={otp_base32}&issuer={issuer}");
-
-        // Update user with OTP data
-        user.otp_secret = Some(otp_base32.to_owned());
-        user.otp_auth_url = Some(otp_auth_url.to_owned());
-
-        // Update the user in the database
-        let _updated: Option<User> = match data
-            .db
-            .update(("mcp_auth", &body.user_id))
-            .content(user)
-            .await
-        {
-            Ok(updated) => updated,
-            Err(_) => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "Failed to update user with OTP data".to_string(),
-                };
-                return Err(HttpResponse::InternalServerError().json(json_error));
-            }
-        };
-
-        Ok((otp_base32, otp_auth_url))
+        _data: &Arc<AppState>,
+    ) -> Result<(String, String), ServiceError> {
+        Ok((body.email.clone(), body.user_id.clone()))
     }
 
     pub async fn verify_otp(
         body: &VerifyOTPSchema,
-        data: &web::Data<AppState>,
-    ) -> Result<UserData, HttpResponse> {
+        data: &Arc<AppState>,
+    ) -> Result<UserData, ServiceError> {
         let db = data.db.clone();
         // Find the user by ID
         let user: Option<User> = match data.db.select(("mcp_auth", &body.user_id)).await {
             Ok(user) => user,
             Err(_) => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "Database error occurred".to_string(),
-                };
-                return Err(HttpResponse::InternalServerError().json(json_error));
+                return Err(ServiceError::DatabaseError(
+                    "Database error occurred".to_string(),
+                ));
             }
         };
 
         let mut user = match user {
             Some(u) => u,
             None => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: format!("No user with Id: {} found", body.user_id),
-                };
-                return Err(HttpResponse::NotFound().json(json_error));
+                return Err(ServiceError::UserNotFound(format!(
+                    "No user with Id: {} found",
+                    body.user_id
+                )));
             }
         };
 
         let otp_base32 = match &user.otp_secret {
             Some(secret) => secret.clone(),
             None => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "OTP not generated for this user".to_string(),
-                };
-                return Err(HttpResponse::BadRequest().json(json_error));
+                return Err(ServiceError::OtpError(
+                    "OTP not generated for this user".to_string(),
+                ));
             }
         };
 
@@ -261,11 +218,9 @@ impl UserService {
         let is_valid = totp.check_current(&body.token).unwrap();
 
         if !is_valid {
-            let json_error = GenericResponse {
-                status: "fail".to_string(),
-                message: "Token is invalid or user doesn't exist".to_string(),
-            };
-            return Err(HttpResponse::Forbidden().json(json_error));
+            return Err(ServiceError::TokenInvalid(
+                "Token is invalid or user doesn't exist".to_string(),
+            ));
         }
 
         user.otp_enabled = Some(true);
@@ -279,11 +234,9 @@ impl UserService {
         {
             Ok(updated) => updated,
             Err(_) => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "Failed to update user verification status".to_string(),
-                };
-                return Err(HttpResponse::InternalServerError().json(json_error));
+                return Err(ServiceError::InternalError(
+                    "Failed to update user verification status".to_string(),
+                ));
             }
         };
 
@@ -295,47 +248,36 @@ impl UserService {
 
     pub async fn validate_otp(
         body: &VerifyOTPSchema,
-        data: &web::Data<AppState>,
-    ) -> Result<bool, HttpResponse> {
+        data: &Arc<AppState>,
+    ) -> Result<bool, ServiceError> {
         // Find the user by ID
         let user: Option<User> = match data.db.select(("mcp_auth", &body.user_id)).await {
             Ok(user) => user,
             Err(_) => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "Database error occurred".to_string(),
-                };
-                return Err(HttpResponse::InternalServerError().json(json_error));
+                return Err(ServiceError::DatabaseError(
+                    "Database error occurred".to_string(),
+                ));
             }
         };
 
         let user = match user {
             Some(u) => u,
             None => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: format!("No user with Id: {} found", body.user_id),
-                };
-                return Err(HttpResponse::NotFound().json(json_error));
+                return Err(ServiceError::UserNotFound(format!(
+                    "No user with Id: {} found",
+                    body.user_id
+                )));
             }
         };
 
         if !user.otp_enabled.unwrap_or(false) {
-            let json_error = GenericResponse {
-                status: "fail".to_string(),
-                message: "2FA not enabled".to_string(),
-            };
-            return Err(HttpResponse::Forbidden().json(json_error));
+            return Err(ServiceError::TokenInvalid("2FA not enabled".to_string()));
         }
 
         let otp_base32 = match &user.otp_secret {
             Some(secret) => secret.clone(),
             None => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "OTP secret not found".to_string(),
-                };
-                return Err(HttpResponse::BadRequest().json(json_error));
+                return Err(ServiceError::OtpError("OTP secret not found".to_string()));
             }
         };
 
@@ -351,9 +293,9 @@ impl UserService {
         let is_valid = totp.check_current(&body.token).unwrap();
 
         if !is_valid {
-            let error_response =
-                json!({"status": "fail", "message": "Token is invalid or user doesn't exist"});
-            return Err(HttpResponse::Forbidden().json(error_response));
+            return Err(ServiceError::TokenInvalid(
+                "Token is invalid or user doesn't exist".to_string(),
+            ));
         }
 
         Ok(true)
@@ -361,29 +303,26 @@ impl UserService {
 
     pub async fn disable_otp(
         body: &DisableOTPSchema,
-        data: &web::Data<AppState>,
-    ) -> Result<UserData, HttpResponse> {
+        data: &Arc<AppState>,
+    ) -> Result<UserData, ServiceError> {
         let db = data.db.clone();
         // Find the user by ID
         let user: Option<User> = match data.db.select(("mcp_auth", &body.user_id)).await {
             Ok(user) => user,
             Err(_) => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "Database error occurred".to_string(),
-                };
-                return Err(HttpResponse::InternalServerError().json(json_error));
+                return Err(ServiceError::DatabaseError(
+                    "Database error occurred".to_string(),
+                ));
             }
         };
 
         let mut user = match user {
             Some(u) => u,
             None => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: format!("No user with Id: {} found", body.user_id),
-                };
-                return Err(HttpResponse::NotFound().json(json_error));
+                return Err(ServiceError::UserNotFound(format!(
+                    "No user with Id: {} found",
+                    body.user_id
+                )));
             }
         };
 
@@ -400,11 +339,9 @@ impl UserService {
         {
             Ok(updated) => updated,
             Err(_) => {
-                let json_error = GenericResponse {
-                    status: "fail".to_string(),
-                    message: "Failed to disable OTP for user".to_string(),
-                };
-                return Err(HttpResponse::InternalServerError().json(json_error));
+                return Err(ServiceError::InternalError(
+                    "Failed to disable OTP for user".to_string(),
+                ));
             }
         };
 

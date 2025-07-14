@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::local::{Db, Mem};
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
 use surrealdb::{Datetime, RecordId, Result as SurrealResult, Surreal};
