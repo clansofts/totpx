@@ -11,16 +11,19 @@ pub struct GenericResponse {
 #[derive(Serialize, Debug)]
 pub struct UserData {
     pub id: String,
-    pub email: String,
-    pub name: String,
-
+    pub username: String,
+    pub secret: String,
+    pub category: String,
+    pub stakeholder: String,
+    pub status: String,
+    pub expired: bool,
+    pub verified: bool,
+    pub otp_secret: Option<String>,
+    pub otp_auth_url: Option<String>,
     pub otp_enabled: bool,
     pub otp_verified: bool,
-    pub otp_base32: Option<String>,
-    pub otp_auth_url: Option<String>,
-
-    pub createdAt: DateTime<Utc>,
-    pub updatedAt: DateTime<Utc>,
+    pub stamp: String,
+    pub changed: String,
 }
 
 #[derive(Serialize, Debug)]

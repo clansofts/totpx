@@ -10,12 +10,13 @@ A secure and lightweight REST API built with Rust and Actix-web that implements 
 - **2FA Validation**: Validate TOTP tokens for ongoing authentication
 - **2FA Management**: Enable/disable 2FA for user accounts
 - **CORS Support**: Cross-origin resource sharing enabled for web applications
-- **In-memory Storage**: Simple in-memory user data storage (suitable for development/testing)
+- **SurrealDB Storage**: Persistent data storage with SurrealDB remote database via WebSocket
 
 ## 🛠️ Tech Stack
 
 - **Rust** - Systems programming language for performance and safety
 - **Actix-web** - High-performance web framework for Rust
+- **SurrealDB** - Multi-model database for modern applications
 - **TOTP-RS** - TOTP (Time-based One-Time Password) implementation
 - **Chrono** - Date and time handling
 - **Serde** - Serialization/deserialization framework
@@ -24,7 +25,8 @@ A secure and lightweight REST API built with Rust and Actix-web that implements 
 
 ## 📋 Prerequisites
 
-- Rust 1.70+ and Cargo
+- Rust 1.70+ and Cargo (using Rust 2024 edition)
+- SurrealDB server running on `0.0.0.0:5555`
 - A TOTP authenticator app (Google Authenticator, Authy, etc.)
 
 ## 🚀 Quick Start
@@ -38,13 +40,23 @@ A secure and lightweight REST API built with Rust and Actix-web that implements 
    cd totpx
    ```
 
-2. **Build the project**
+2. **Start SurrealDB server**
+
+   ```bash
+   # Install SurrealDB if not already installed
+   # curl --proto '=https' --tlsv1.2 -sSf https://install.surrealdb.com | sh
+   
+   # Start SurrealDB server
+   surreal start --bind 0.0.0.0:5555 --user root --pass '@Cr34f1n1ty'
+   ```
+
+3. **Build the project**
 
    ```bash
    cargo build
    ```
 
-3. **Run the server**
+4. **Run the server**
 
    ```bash
    cargo run
@@ -93,7 +105,7 @@ Content-Type: application/json
 
 {
   "name": "John Doe",
-  "email": "john@example.com",
+  "email": "john@example.com", 
   "password": "secure_password"
 }
 ```
@@ -134,15 +146,19 @@ Content-Type: application/json
 {
   "status": "success",
   "user": {
-    "id": "uuid-string",
-    "email": "john@example.com",
-    "name": "John Doe",
+    "id": "user:uuid-string",
+    "category": "user_category",
+    "username": "john@example.com",
+    "status": "active",
+    "stakeholder": "organization_name",
+    "expired": false,
+    "verified": true,
     "otp_enabled": false,
     "otp_verified": false,
-    "otp_base32": null,
+    "otp_secret": null,
     "otp_auth_url": null,
-    "createdAt": "2025-07-12T10:00:00Z",
-    "updatedAt": "2025-07-12T10:00:00Z"
+    "stamp": "2025-07-12T10:00:00Z",
+    "changed": "2025-07-12T10:00:00Z"
   }
 }
 ```
@@ -186,15 +202,19 @@ Content-Type: application/json
 {
   "otp_verified": true,
   "user": {
-    "id": "uuid-string",
-    "email": "john@example.com",
-    "name": "John Doe",
+    "id": "user:uuid-string",
+    "category": "user_category", 
+    "username": "john@example.com",
+    "status": "active",
+    "stakeholder": "organization_name",
+    "expired": false,
+    "verified": true,
     "otp_enabled": true,
     "otp_verified": true,
-    "otp_base32": "JBSWY3DPEHPK3PXP",
+    "otp_secret": "JBSWY3DPEHPK3PXP",
     "otp_auth_url": "otpauth://totp/...",
-    "createdAt": "2025-07-12T10:00:00Z",
-    "updatedAt": "2025-07-12T10:00:00Z"
+    "stamp": "2025-07-12T10:00:00Z",
+    "changed": "2025-07-12T10:00:00Z"
   }
 }
 ```
@@ -235,15 +255,19 @@ Content-Type: application/json
 ```json
 {
   "user": {
-    "id": "uuid-string",
-    "email": "john@example.com",
-    "name": "John Doe",
+    "id": "user:uuid-string",
+    "category": "user_category",
+    "username": "john@example.com", 
+    "status": "active",
+    "stakeholder": "organization_name",
+    "expired": false,
+    "verified": true,
     "otp_enabled": false,
     "otp_verified": false,
-    "otp_base32": null,
+    "otp_secret": null,
     "otp_auth_url": null,
-    "createdAt": "2025-07-12T10:00:00Z",
-    "updatedAt": "2025-07-12T10:00:00Z"
+    "stamp": "2025-07-12T10:00:00Z",
+    "changed": "2025-07-12T10:00:00Z"
   },
   "otp_disabled": true
 }
@@ -263,19 +287,68 @@ Content-Type: application/json
 ```text
 src/
 ├── main.rs          # Application entry point and server configuration
+├── api.rs           # API route handlers and Actix-web layer
+├── services.rs      # Business logic and service layer
 ├── models.rs        # Data models and application state
 ├── response.rs      # Response structures
-└── service.rs       # API route handlers and business logic
+└── increment.surql  # SurrealDB functions for counter and serial generation
 ```
 
 ### Key Components
 
-- **AppState**: In-memory storage for user data
-- **User**: Core user model with 2FA fields
+- **main.rs**: Application entry point with server configuration
+- **api.rs**: HTTP endpoints and request/response handling (Actix-web layer)
+- **services.rs**: Business logic, data validation, and core functionality
+- **models.rs**: Data structures and application state management
+- **response.rs**: Response DTOs and data transformation
+- **AppState**: SurrealDB database connection and state management
+- **UserService**: Service layer handling all business operations
 - **TOTP Integration**: Secure TOTP generation and validation
 - **CORS Configuration**: Enabled for `localhost:3000`
 
+## 🏛️ Architecture
+
+The application follows a layered architecture pattern with clear separation of concerns:
+
+### API Layer (`api.rs`)
+
+- Handles HTTP requests and responses
+- Input validation and serialization/deserialization
+- Actix-web route handlers and middleware integration
+- Maps service results to appropriate HTTP responses
+
+### Service Layer (`services.rs`)
+
+- Contains all business logic and rules
+- Data processing and validation
+- TOTP generation and verification logic
+- User management operations
+- Returns structured results that can be easily mapped to HTTP responses
+
+### Model Layer (`models.rs`)
+
+- Data structures and schemas
+- SurrealDB database configuration and connection
+- Request/response DTOs
+
+This architecture provides:
+
+- **Testability**: Business logic is decoupled from HTTP framework
+- **Maintainability**: Clear separation between web layer and business logic
+- **Reusability**: Service layer can be used by different presentation layers
+- **Scalability**: Easy to extend with additional services or API versions
+
 ## ⚙️ Configuration
+
+### Database Configuration
+
+The application connects to a remote SurrealDB instance with the following settings:
+
+- **Address**: `0.0.0.0:5555`
+- **Username**: `root`
+- **Password**: `@832ybdsb2u272`
+- **Namespace**: `malipo`
+- **Database**: `eventors`
 
 ### CORS Settings
 
@@ -308,7 +381,7 @@ curl -X POST http://127.0.0.1:8000/api/auth/register \
 
 - **Password Security**: Passwords are stored in plain text (implement hashing for production)
 - **TOTP Secrets**: Securely generated using cryptographic randomness
-- **In-Memory Storage**: Data is lost on restart (implement persistent storage for production)
+- **SurrealDB Storage**: Remote database connection (ensure proper network security and access controls)
 - **HTTPS**: Use HTTPS in production environments
 - **Rate Limiting**: Consider implementing rate limiting for authentication endpoints
 
@@ -316,7 +389,7 @@ curl -X POST http://127.0.0.1:8000/api/auth/register \
 
 For production use, consider:
 
-1. **Database Integration**: Replace in-memory storage with a proper database
+1. **Database Security**: Secure SurrealDB connection with proper authentication and network security
 2. **Password Hashing**: Implement bcrypt or similar for password security
 3. **JWT Tokens**: Add JWT-based authentication
 4. **Rate Limiting**: Implement rate limiting middleware
@@ -330,13 +403,16 @@ For production use, consider:
 actix-cors = "0.7.1"      # CORS middleware
 actix-web = "4.11.0"      # Web framework
 base32 = "0.5.1"          # Base32 encoding
-chrono = "0.4.41"         # Date/time handling
+chrono = "0.4.41"         # Date/time handling (with serde support)
 env_logger = "0.11.8"     # Logging
 rand = "0.9.1"            # Random number generation
-serde = "1.0.219"         # Serialization
+serde = "1.0.219"         # Serialization (with derive features)
 serde_json = "1.0.140"    # JSON serialization
+surrealdb = "2.3.7"       # SurrealDB client (with kv-mem features)
+thiserror = "2.0.12"      # Error handling
+tokio = "1.44.0"          # Async runtime (with macros and rt-multi-thread)
 totp-rs = "5.7.0"         # TOTP implementation
-uuid = "1.17.0"           # UUID generation
+uuid = "1.17.0"           # UUID generation (with v4 support)
 ```
 
 ## 📄 License

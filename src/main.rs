@@ -1,6 +1,7 @@
+mod api;
 mod models;
 mod response;
-mod service;
+mod services;
 
 use actix_cors::Cors;
 use actix_web::middleware::Logger;
@@ -14,7 +15,9 @@ async fn main() -> std::io::Result<()> {
     // }
     env_logger::init();
 
-    let db = AppState::init();
+    let db = AppState::init()
+        .await
+        .expect("Failed to initialize database");
     let app_data = web::Data::new(db);
 
     println!("🚀 Server started successfully");
@@ -33,7 +36,7 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .app_data(app_data.clone())
-            .configure(service::config)
+            .configure(api::config)
             .wrap(cors)
             .wrap(Logger::default())
     })
