@@ -1,6 +1,6 @@
 # TOTPX - Two-Factor Authentication (2FA) REST API
 
-A secure and lightweight REST API built with Rust and Actix-web that implements Time-based One-Time Password (TOTP) authentication for enhanced security.
+A secure and lightweight REST API built with Rust and Axum that implements Time-based One-Time Password (TOTP) authentication for enhanced security.
 
 ## 🚀 Features
 
@@ -15,13 +15,14 @@ A secure and lightweight REST API built with Rust and Actix-web that implements 
 ## 🛠️ Tech Stack
 
 - **Rust** - Systems programming language for performance and safety
-- **Actix-web** - High-performance web framework for Rust
+- **Axum** - High-performance web framework for Rust
 - **SurrealDB** - Multi-model database for modern applications
 - **TOTP-RS** - TOTP (Time-based One-Time Password) implementation
 - **Chrono** - Date and time handling
 - **Serde** - Serialization/deserialization framework
 - **UUID** - Unique identifier generation
 - **Base32** - Base32 encoding for TOTP secrets
+- **Tower-HTTP** - HTTP middleware for Axum
 
 ## 📋 Prerequisites
 
@@ -36,7 +37,7 @@ A secure and lightweight REST API built with Rust and Actix-web that implements 
 1. **Clone the repository**
 
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/clansofts/totpx.git
    cd totpx
    ```
 
@@ -69,7 +70,7 @@ The server will start on `http://127.0.0.1:8000`
 Enable logging (optional):
 
 ```bash
-export RUST_LOG=actix_web=info
+export RUST_LOG=debug
 ```
 
 ## 📚 API Documentation
@@ -287,17 +288,17 @@ Content-Type: application/json
 ```text
 src/
 ├── main.rs          # Application entry point and server configuration
-├── api.rs           # API route handlers and Actix-web layer
+├── api.rs           # API route handlers and Axum layer
 ├── services.rs      # Business logic and service layer
 ├── models.rs        # Data models and application state
-├── response.rs      # Response structures
-└── increment.surql  # SurrealDB functions for counter and serial generation
+└── response.rs      # Response structures
+increment.surql      # SurrealDB functions for counter and serial generation
 ```
 
 ### Key Components
 
 - **main.rs**: Application entry point with server configuration
-- **api.rs**: HTTP endpoints and request/response handling (Actix-web layer)
+- **api.rs**: HTTP endpoints and request/response handling (Axum layer)
 - **services.rs**: Business logic, data validation, and core functionality
 - **models.rs**: Data structures and application state management
 - **response.rs**: Response DTOs and data transformation
@@ -314,7 +315,7 @@ The application follows a layered architecture pattern with clear separation of 
 
 - Handles HTTP requests and responses
 - Input validation and serialization/deserialization
-- Actix-web route handlers and middleware integration
+- Axum route handlers and middleware integration
 - Maps service results to appropriate HTTP responses
 
 ### Service Layer (`services.rs`)
@@ -346,7 +347,7 @@ The application connects to a remote SurrealDB instance with the following setti
 
 - **Address**: `0.0.0.0:5555`
 - **Username**: `root`
-- **Password**: `@832ybdsb2u272`
+- **Password**: `@273gha732hjaaa`
 - **Namespace**: `malipo`
 - **Database**: `eventors`
 
@@ -392,19 +393,20 @@ For production use, consider:
 1. **Database Security**: Secure SurrealDB connection with proper authentication and network security
 2. **Password Hashing**: Implement bcrypt or similar for password security
 3. **JWT Tokens**: Add JWT-based authentication
-4. **Rate Limiting**: Implement rate limiting middleware
-5. **Logging**: Enhanced logging and monitoring
+4. **Rate Limiting**: Implement rate limiting middleware with Tower
+5. **Logging**: Enhanced logging and monitoring with structured tracing
 6. **Environment Configuration**: Use environment variables for configuration
 7. **HTTPS**: Deploy with TLS/SSL certificates
+8. **Axum Middleware**: Leverage Tower ecosystem for additional middleware
 
 ## 📝 Dependencies
 
 ```toml
-actix-cors = "0.7.1"      # CORS middleware
-actix-web = "4.11.0"      # Web framework
+axum = "0.8.4"            # Web framework
+tower = "0.5.2"           # Middleware and utilities for async code
+tower-http = "0.6.6"      # HTTP middleware (with cors and trace features)
 base32 = "0.5.1"          # Base32 encoding
 chrono = "0.4.41"         # Date/time handling (with serde support)
-env_logger = "0.11.8"     # Logging
 rand = "0.9.1"            # Random number generation
 serde = "1.0.219"         # Serialization (with derive features)
 serde_json = "1.0.140"    # JSON serialization
@@ -413,6 +415,8 @@ thiserror = "2.0.12"      # Error handling
 tokio = "1.44.0"          # Async runtime (with macros and rt-multi-thread)
 totp-rs = "5.7.0"         # TOTP implementation
 uuid = "1.17.0"           # UUID generation (with v4 support)
+tracing = "0.1"           # Application-level tracing
+tracing-subscriber = "0.3" # Tracing subscriber for logging
 ```
 
 ## 📄 License
@@ -429,4 +433,4 @@ uuid = "1.17.0"           # UUID generation (with v4 support)
 
 ---
 
-**Note**: This is a development/demonstration implementation. For production use, implement proper password hashing, persistent storage, and additional security measures.
+**Note**: This is a development/demonstration implementation using Axum web framework. For production use, implement proper password hashing, persistent storage, and additional security measures.
