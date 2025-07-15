@@ -1,4 +1,3 @@
-use chrono::prelude::*;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -30,4 +29,11 @@ pub struct UserData {
 pub struct UserResponse {
     pub status: String,
     pub user: UserData,
+}
+
+#[allow(non_snake_case)]
+#[derive(Serialize, Debug)]
+pub struct GenOtpResponse {
+    pub base32_secret: String,
+    pub otp_auth_url: String,
 }

@@ -1,9 +1,5 @@
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
-use surrealdb::engine::remote::ws::{Client, Ws};
-use surrealdb::opt::auth::Root;
-use surrealdb::{Datetime, RecordId, Result as SurrealResult, Surreal};
+use surrealdb::{Datetime, RecordId};
 
 #[derive(Serialize, Deserialize)]
 pub struct SignupParams<'a> {
@@ -40,34 +36,11 @@ pub struct User {
     pub changed: Option<Datetime>,
 }
 
-pub struct AppState {
-    pub db: Arc<Surreal<Client>>,
-}
-
-impl AppState {
-    pub async fn init() -> SurrealResult<AppState> {
-        println!("Initializing Authentication Database Connection");
-        let address = String::from("0.0.0.0:5555");
-        let username = String::from("root");
-        let secret = String::from("@Cr34f1n1ty");
-        let namespace = String::from("malipo");
-        let database = String::from("eventors");
-
-        // Initialize SurrealDB
-        let db = Surreal::new::<Ws>(address).await?;
-
-        // Signin as a namespace, database, or root user
-        db.signin(Root {
-            username: &username,
-            password: &secret,
-        })
-        .await?;
-
-        // Select a specific namespace / database
-        db.use_ns(namespace).use_db(database).await?;
-
-        Ok(AppState { db: Arc::new(db) })
-    }
+#[allow(non_snake_case)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct User2Fa {
+    pub otp_secret: Option<String>,
+    pub otp_auth_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

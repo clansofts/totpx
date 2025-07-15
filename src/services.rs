@@ -1,28 +1,39 @@
 use crate::{
+    db::AppState,
     models::{
-        AppState, DisableOTPSchema, GenerateOTPSchema, SigninParams, SignupParams, User,
-        UserLoginSchema, UserRegisterSchema, VerifyOTPSchema,
+        DisableOTPSchema, GenerateOTPSchema, SigninParams, SignupParams, User, UserLoginSchema,
+        UserRegisterSchema, VerifyOTPSchema,
     },
-    response::{GenericResponse, UserData, UserResponse},
+    response::{GenOtpResponse, GenericResponse, UserData, UserResponse},
 };
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Json},
 };
 use chrono::prelude::*;
-use std::sync::Arc;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
 use surrealdb::{Datetime, Error, opt::auth::Record};
+use thiserror::Error;
 use totp_rs::{Algorithm, Secret, TOTP};
 use uuid::Uuid;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ServiceError {
+    #[error("{0}")]
     DatabaseError(String),
+    #[error("{0}")]
     UserExists(String),
+    #[error("{0}")]
     UserNotFound(String),
+    #[error("{0}")]
     OtpError(String),
+    #[error("{0}")]
     TokenInvalid(String),
+    #[error("{0}")]
     InternalError(String),
+    #[error("database error")]
+    Db(String),
 }
 
 impl IntoResponse for ServiceError {
@@ -34,6 +45,7 @@ impl IntoResponse for ServiceError {
             ServiceError::OtpError(msg) => (StatusCode::BAD_REQUEST, msg),
             ServiceError::TokenInvalid(msg) => (StatusCode::FORBIDDEN, msg),
             ServiceError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            ServiceError::Db(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
         let error_response = GenericResponse {
@@ -45,12 +57,46 @@ impl IntoResponse for ServiceError {
     }
 }
 
+// From<serde_json::Error> for ServiceError
+impl From<serde_json::Error> for ServiceError {
+    fn from(err: serde_json::Error) -> Self {
+        ServiceError::InternalError(format!("JSON error: {}", err))
+    }
+}
+
+// From<surrealdb::Error> for ServiceError
+impl From<surrealdb::Error> for ServiceError {
+    fn from(err: surrealdb::Error) -> Self {
+        ServiceError::Db(format!("SurrealDB error: {}", err))
+    }
+}
+
+impl Serialize for ServiceError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let message = self.to_string();
+        serializer.serialize_str(&message)
+    }
+}
+
+impl<'de> Deserialize<'de> for ServiceError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let message = String::deserialize(deserializer)?;
+        Ok(ServiceError::InternalError(message))
+    }
+}
+
 pub struct UserService;
 
 impl UserService {
     pub async fn register_user(
-        body: &UserRegisterSchema,
-        data: &Arc<AppState>,
+        body: UserRegisterSchema,
+        data: AppState,
     ) -> Result<String, ServiceError> {
         // Get the db
         let db = data.db.clone();
@@ -123,10 +169,7 @@ impl UserService {
         ))
     }
 
-    pub async fn login_user(
-        body: &UserLoginSchema,
-        data: &Arc<AppState>,
-    ) -> Result<UserResponse, Error> {
+    pub async fn login_user(body: UserLoginSchema, data: AppState) -> Result<UserResponse, Error> {
         let db = data.db.clone();
 
         // Signin using user credentials
@@ -166,15 +209,74 @@ impl UserService {
     }
 
     pub async fn generate_otp(
-        body: &GenerateOTPSchema,
-        _data: &Arc<AppState>,
-    ) -> Result<(String, String), ServiceError> {
-        Ok((body.email.clone(), body.user_id.clone()))
+        body: GenerateOTPSchema,
+        data: AppState,
+    ) -> Result<GenOtpResponse, ServiceError> {
+        // Ok((body.email.clone(), body.user_id.clone()))
+        let db = data.db.clone();
+
+        // Find the user by ID
+        let mut user: User = db.select(("mcp_auth", &body.user_id)).await?.unwrap();
+
+        // Generate a random base32 secret only if the user does not have one
+        if user.otp_secret.is_some()
+            || user.otp_auth_url.is_some()
+            || user.otp_enabled.unwrap_or(false)
+            || user.otp_verified.unwrap_or(false)
+        {
+            return Err(ServiceError::OtpError(
+                "User 2FA already Setup and".to_string(),
+            ));
+        }
+
+        let mut rng = rand::rng();
+        let data_byte: [u8; 21] = rng.random();
+        let base32_string =
+            base32::encode(base32::Alphabet::Rfc4648 { padding: false }, &data_byte);
+
+        let totp = TOTP::new(
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
+            Secret::Encoded(base32_string).to_bytes().unwrap(),
+        )
+        .unwrap();
+
+        let otp_base32 = totp.get_secret_base32();
+        let email = body.email.to_owned();
+        let issuer = "Malipo Popote Solutions";
+        let otp_auth_url =
+            format!("otpauth://totp/{issuer}:{email}?secret={otp_base32}&issuer={issuer}");
+
+        // Update user with OTP data
+        user.otp_secret = Some(otp_base32.to_owned());
+        user.otp_auth_url = Some(otp_auth_url.to_owned());
+
+        // Update the user in the database
+        /*let updated_user: Option<User> = match db
+            .update(("mcp_auth", &body.user_id))
+            .content(user.clone())
+            .await
+        {
+            Ok(updated) => updated,
+            Err(err) => {
+                return Err(ServiceError::InternalError(err.to_string()));
+            }
+        };*/
+
+        // let updated_user: User = db.select(("mcp_auth", &body.user_id)).await?.unwrap();
+        // println!("Updated User: {:?}", updated_user);
+
+        Ok(GenOtpResponse {
+            base32_secret: otp_base32.clone(),
+            otp_auth_url: otp_auth_url.clone(),
+        })
     }
 
     pub async fn verify_otp(
-        body: &VerifyOTPSchema,
-        data: &Arc<AppState>,
+        body: VerifyOTPSchema,
+        data: AppState,
     ) -> Result<UserData, ServiceError> {
         let db = data.db.clone();
         // Find the user by ID
@@ -246,10 +348,7 @@ impl UserService {
         }
     }
 
-    pub async fn validate_otp(
-        body: &VerifyOTPSchema,
-        data: &Arc<AppState>,
-    ) -> Result<bool, ServiceError> {
+    pub async fn validate_otp(body: VerifyOTPSchema, data: AppState) -> Result<bool, ServiceError> {
         // Find the user by ID
         let user: Option<User> = match data.db.select(("mcp_auth", &body.user_id)).await {
             Ok(user) => user,
@@ -302,8 +401,8 @@ impl UserService {
     }
 
     pub async fn disable_otp(
-        body: &DisableOTPSchema,
-        data: &Arc<AppState>,
+        body: DisableOTPSchema,
+        data: AppState,
     ) -> Result<UserData, ServiceError> {
         let db = data.db.clone();
         // Find the user by ID
