@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 
 #[derive(Serialize)]
 pub struct GenericResponse {
@@ -7,7 +7,7 @@ pub struct GenericResponse {
 }
 
 #[allow(non_snake_case)]
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone, Deserialize)]
 pub struct UserData {
     pub id: String,
     pub username: String,
@@ -25,14 +25,14 @@ pub struct UserData {
     pub changed: String,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone, Deserialize)]
 pub struct UserResponse {
     pub status: String,
     pub user: UserData,
 }
 
 #[allow(non_snake_case)]
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone, Deserialize)]
 pub struct GenOtpResponse {
     pub base32_secret: String,
     pub otp_auth_url: String,

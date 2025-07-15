@@ -287,57 +287,193 @@ Content-Type: application/json
 
 ```text
 src/
-├── main.rs          # Application entry point and server configuration
-├── api.rs           # API route handlers and Axum layer
-├── services.rs      # Business logic and service layer
-├── models.rs        # Data models and application state
-└── response.rs      # Response structures
-increment.surql      # SurrealDB functions for counter and serial generation
+├── main.rs              # Application entry point and server configuration
+├── api.rs               # Original API route handlers (legacy)
+├── cqrs_api.rs          # CQRS-based API route handlers
+├── services.rs          # Original business logic (legacy)
+├── cqrs_service.rs      # CQRS service layer
+├── models.rs            # Data models and application state
+├── response.rs          # Response structures
+├── db.rs                # Database connection utilities
+└── cqrs/                # CQRS implementation modules
+    ├── mod.rs           # CQRS module exports
+    ├── commands.rs      # Command definitions
+    ├── events.rs        # Event definitions
+    ├── queries.rs       # Query definitions
+    ├── command_handler.rs # Command processing logic
+    ├── query_handler.rs   # Query processing logic
+    ├── event_store.rs     # Event store implementation
+    └── projections.rs     # Read model projections
+increment.surql          # SurrealDB functions for counter and serial generation
 ```
 
 ### Key Components
 
 - **main.rs**: Application entry point with server configuration
-- **api.rs**: HTTP endpoints and request/response handling (Axum layer)
-- **services.rs**: Business logic, data validation, and core functionality
+- **cqrs_api.rs**: HTTP endpoints with CQRS pattern (commands and queries)
+- **cqrs_service.rs**: CQRS service layer coordinating commands and queries  
+- **command_handler.rs**: Processes commands and generates events
+- **query_handler.rs**: Handles read operations from optimized models
+- **event_store.rs**: Persists and retrieves domain events (`events_store` table)
+- **projections.rs**: Updates read models from events (`mcp_auth` table)
 - **models.rs**: Data structures and application state management
 - **response.rs**: Response DTOs and data transformation
 - **AppState**: SurrealDB database connection and state management
-- **UserService**: Service layer handling all business operations
-- **TOTP Integration**: Secure TOTP generation and validation
+- **TOTP Integration**: Secure TOTP generation and validation with event sourcing
 - **CORS Configuration**: Enabled for `localhost:3000`
 
-## 🏛️ Architecture
+## 🏛️ Architecture - CQRS Implementation
 
-The application follows a layered architecture pattern with clear separation of concerns:
+The application has been converted to use **CQRS (Command Query Responsibility Segregation)** pattern with event sourcing for enhanced scalability, auditability, and separation of concerns.
 
-### API Layer (`api.rs`)
+### CQRS Components
+
+#### **Command Side (Write Operations)**
+- **Event Store (`events_store` table)**: Stores all domain events as the source of truth
+- **Command Handlers**: Process commands and generate events
+- **Commands**: Represent user intentions (RegisterUser, GenerateOtp, etc.)
+- **Events**: Immutable facts about what happened (UserRegistered, OtpGenerated, etc.)
+
+#### **Query Side (Read Operations)**  
+- **Read Model (`mcp_auth` table)**: Optimized for queries, built from events
+- **Query Handlers**: Handle read operations efficiently
+- **Projections**: Update read models when events occur
+
+### Architecture Benefits
+
+- **Scalability**: Read and write sides can scale independently
+- **Auditability**: Complete event history for compliance and debugging
+- **Performance**: Optimized read models for different query patterns
+- **Reliability**: Event sourcing provides natural backup and replay capabilities
+- **Flexibility**: Easy to add new read models without affecting write side
+
+### Data Flow
+
+1. **Commands** → **Command Handlers** → **Events** → **Event Store**
+2. **Events** → **Projections** → **Read Models** 
+3. **Queries** → **Query Handlers** → **Read Models**
+
+### Event Store Schema
+
+```sql
+-- Event Store (events_store table)
+{
+  "event_id": "uuid",
+  "aggregate_id": "user_id", 
+  "aggregate_type": "User",
+  "event_version": 1,
+  "event_data": {
+    "event_type": "UserRegistered|OtpGenerated|OtpVerified|...",
+    // event-specific data
+  },
+  "timestamp": "2025-07-15T10:00:00Z"
+}
+```
+
+### Available Commands
+
+- `RegisterUser` - Register a new user account
+- `LoginUser` - Authenticate user login
+- `GenerateOtp` - Generate TOTP secret for 2FA
+- `VerifyOtp` - Verify TOTP token and enable 2FA
+- `ValidateOtp` - Validate TOTP token for authentication
+- `DisableOtp` - Disable 2FA for user account
+
+### Available Queries
+
+- `GetUserById` - Retrieve user by ID
+- `GetUserByEmail` - Find user by email address
+- `GetAllUsers` - List all users
+- `GetUsersWithOtpEnabled` - List users with 2FA enabled
+
+### New API Endpoints (CQRS)
+
+#### Query Endpoints (Read Operations)
+```http
+GET /api/users/:user_id          # Get user by ID
+GET /api/users                   # Get all users  
+GET /api/users/otp-enabled       # Get users with 2FA enabled
+GET /api/stats/users             # Get user statistics
+```
+
+#### Command Endpoints (Write Operations) 
+```http
+POST /api/auth/register          # Register user (command)
+POST /api/auth/login             # Login user (command)  
+POST /api/auth/otp/generate      # Generate OTP (command)
+POST /api/auth/otp/verify        # Verify OTP (command)
+POST /api/auth/otp/validate      # Validate OTP (command)
+POST /api/auth/otp/disable       # Disable OTP (command)
+```
+
+### Event Sourcing Benefits
+
+- **Complete Audit Trail**: Every action is recorded as an immutable event
+- **Time Travel**: Query system state at any point in history
+- **Replay Capability**: Rebuild read models by replaying events
+- **Natural Backup**: Event store serves as definitive system backup
+
+## 🚧 Implementation Status
+
+### Current Status
+- ✅ **Original Architecture**: Fully functional with traditional layered approach
+- 🔄 **CQRS Architecture**: Implementation in progress with the following components:
+
+#### Completed CQRS Components
+- ✅ Event definitions and command/query models
+- ✅ Event store structure and interface
+- ✅ Command and query handler architecture
+- ✅ Projection system design
+- ✅ CQRS service layer interface
+
+#### In Progress
+- 🔄 Type compatibility and serialization fixes
+- 🔄 Database operation refinements
+- 🔄 Error handling improvements
+- 🔄 Integration testing
+
+#### To Switch to CQRS
+1. Fix compilation errors in CQRS modules
+2. Update main.rs to use `cqrs_api::create_routes()`
+3. Run database migrations to set up `events_store` table
+4. Test complete CQRS workflow
+
+The application currently runs with the original architecture while the CQRS implementation is being finalized.
+
+### API Layer (`api.rs` / `cqrs_api.rs`)
 
 - Handles HTTP requests and responses
 - Input validation and serialization/deserialization
 - Axum route handlers and middleware integration
-- Maps service results to appropriate HTTP responses
+- Maps command/query results to appropriate HTTP responses
+- Separates command endpoints (writes) from query endpoints (reads)
 
-### Service Layer (`services.rs`)
+### Service Layer (`services.rs` / `cqrs_service.rs`)
 
-- Contains all business logic and rules
-- Data processing and validation
+- **Command Handlers**: Process commands and generate events
+- **Query Handlers**: Handle read operations from optimized read models
+- **Event Store**: Persist and retrieve domain events
+- **Projections**: Update read models based on events
 - TOTP generation and verification logic
-- User management operations
-- Returns structured results that can be easily mapped to HTTP responses
+- User management operations with full audit trail
 
 ### Model Layer (`models.rs`)
 
-- Data structures and schemas
+- Data structures and schemas for commands, events, and queries
 - SurrealDB database configuration and connection
+- Event store and read model schemas
 - Request/response DTOs
 
-This architecture provides:
+This CQRS architecture provides:
 
+- **Scalability**: Command and query sides scale independently
+- **Performance**: Optimized read models for different access patterns
+- **Auditability**: Complete event history for compliance and debugging
 - **Testability**: Business logic is decoupled from HTTP framework
-- **Maintainability**: Clear separation between web layer and business logic
+- **Maintainability**: Clear separation between write and read operations
 - **Reusability**: Service layer can be used by different presentation layers
-- **Scalability**: Easy to extend with additional services or API versions
+- **Reliability**: Event sourcing provides natural backup and replay capabilities
+- **Flexibility**: Easy to add new projections without affecting existing code
 
 ## ⚙️ Configuration
 

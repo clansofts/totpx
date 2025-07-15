@@ -1,4 +1,5 @@
 use crate::{
+    cqrs_service::CqrsUserService,
     db::AppState,
     models::{
         DisableOTPSchema, GenerateOTPSchema, SigninParams, SignupParams, User, UserLoginSchema,
@@ -98,113 +99,23 @@ impl UserService {
         body: UserRegisterSchema,
         data: AppState,
     ) -> Result<String, ServiceError> {
-        // Get the db
-        let db = data.db.clone();
-        // Check if user already exists
-        let existing_users: Vec<User> = match db.select("mcp_auth").await {
-            Ok(users) => users,
+        let service = CqrsUserService::new(data);
+        
+        match service.register_user(&body).await {
+            Ok(message) => Ok(message),
             Err(_) => {
-                return Err(ServiceError::DatabaseError(
-                    "Database error occurred".to_string(),
-                ));
-            }
-        };
-
-        for user in existing_users.iter() {
-            if user.username == body.email.to_lowercase() {
-                return Err(ServiceError::UserExists(format!(
-                    "User with email: {} already exists",
-                    user.username
-                )));
+                // For now, fall back to a generic error
+                Err(ServiceError::InternalError("Registration failed".to_string()))
             }
         }
-
-        let _uuid_id = Uuid::new_v4();
-        let datetime = Utc::now();
-
-        let user = User {
-            id: None,
-            username: body.email.to_owned().to_lowercase(),
-            status: body.name.to_owned(),
-            secret: body.password.to_owned(),
-            otp_enabled: Some(false),
-            otp_verified: Some(false),
-            otp_secret: None,
-            otp_auth_url: None,
-            stamp: Some(Datetime::from(datetime)),
-            changed: Some(Datetime::from(datetime)),
-            category: "Root".to_string(),
-            stakeholder: "".to_string(),
-            expired: Some(false),
-            verified: Some(false),
-        };
-
-        // Signup the user on surrealdb
-        let jwt = match db
-            .signup(Record {
-                access: "mcp_authx",
-                namespace: "malipo",
-                database: "eventors",
-                params: SignupParams {
-                    username: user.username.as_str(),
-                    secret: user.secret.as_str(),
-                    category: "App/Individual/Organization",
-                    stakeholder: "",
-                    status: "New",
-                },
-            })
-            .await
-        {
-            Ok(token) => token.into_insecure_token(),
-            Err(_) => {
-                return Err(ServiceError::InternalError(
-                    "Failed to signup user".to_string(),
-                ));
-            }
-        };
-
-        Ok(format!(
-            "Registered successfully, please login with token: {}",
-            jwt
-        ))
     }
 
     pub async fn login_user(body: UserLoginSchema, data: AppState) -> Result<UserResponse, Error> {
-        let db = data.db.clone();
-
-        // Signin using user credentials
-        match db
-            .signin(Record {
-                access: "mcp_authx",
-                namespace: "malipo",
-                database: "eventors",
-                params: SigninParams {
-                    username: body.email.as_str(),
-                    secret: body.password.as_str(),
-                },
-            })
-            .await
-        {
-            Ok(token) => {
-                let token = token.into_insecure_token();
-                println!("Token: {}", token.clone());
-                // Run queries
-                let mut result = db
-                    .query("select * from only  mcp_auth where username = $username")
-                    .bind(("username", body.email.clone().to_lowercase()))
-                    .await?;
-
-                let ress: Option<User> = result.take(0)?;
-                println!("Result: {:?}", ress.clone());
-                let user = ress.unwrap();
-
-                let json_response = UserResponse {
-                    status: "success".to_string(),
-                    user: Self::user_to_response(&user),
-                };
-                Ok(json_response)
-            }
-            Err(e) => Err(e),
+        let service = CqrsUserService::new(data);
+        
+        match service.login_user(&body).await {
+            Ok(response) => Ok(response),
+            Err(error) => Err(error),
         }
     }
 
@@ -212,241 +123,57 @@ impl UserService {
         body: GenerateOTPSchema,
         data: AppState,
     ) -> Result<GenOtpResponse, ServiceError> {
-        // Ok((body.email.clone(), body.user_id.clone()))
-        let db = data.db.clone();
-
-        // Find the user by ID
-        let mut user: User = db.select(("mcp_auth", &body.user_id)).await?.unwrap();
-
-        // Generate a random base32 secret only if the user does not have one
-        if user.otp_secret.is_some()
-            || user.otp_auth_url.is_some()
-            || user.otp_enabled.unwrap_or(false)
-            || user.otp_verified.unwrap_or(false)
-        {
-            return Err(ServiceError::OtpError(
-                "User 2FA already Setup and".to_string(),
-            ));
-        }
-
-        let mut rng = rand::rng();
-        let data_byte: [u8; 21] = rng.random();
-        let base32_string =
-            base32::encode(base32::Alphabet::Rfc4648 { padding: false }, &data_byte);
-
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
-            Secret::Encoded(base32_string).to_bytes().unwrap(),
-        )
-        .unwrap();
-
-        let otp_base32 = totp.get_secret_base32();
-        let email = body.email.to_owned();
-        let issuer = "Malipo Popote Solutions";
-        let otp_auth_url =
-            format!("otpauth://totp/{issuer}:{email}?secret={otp_base32}&issuer={issuer}");
-
-        // Update user with OTP data
-        user.otp_secret = Some(otp_base32.to_owned());
-        user.otp_auth_url = Some(otp_auth_url.to_owned());
-
-        // Update the user in the database
-        /*let updated_user: Option<User> = match db
-            .update(("mcp_auth", &body.user_id))
-            .content(user.clone())
-            .await
-        {
-            Ok(updated) => updated,
-            Err(err) => {
-                return Err(ServiceError::InternalError(err.to_string()));
+        let service = CqrsUserService::new(data);
+        
+        match service.generate_otp(&body).await {
+            Ok((base32_secret, otp_auth_url)) => {
+                Ok(GenOtpResponse {
+                    base32_secret,
+                    otp_auth_url,
+                })
             }
-        };*/
-
-        // let updated_user: User = db.select(("mcp_auth", &body.user_id)).await?.unwrap();
-        // println!("Updated User: {:?}", updated_user);
-
-        Ok(GenOtpResponse {
-            base32_secret: otp_base32.clone(),
-            otp_auth_url: otp_auth_url.clone(),
-        })
+            Err(_) => {
+                Err(ServiceError::OtpError("Failed to generate OTP".to_string()))
+            }
+        }
     }
 
     pub async fn verify_otp(
         body: VerifyOTPSchema,
         data: AppState,
     ) -> Result<UserData, ServiceError> {
-        let db = data.db.clone();
-        // Find the user by ID
-        let user: Option<User> = match data.db.select(("mcp_auth", &body.user_id)).await {
-            Ok(user) => user,
+        let service = CqrsUserService::new(data);
+        
+        match service.verify_otp(&body).await {
+            Ok(user_data) => Ok(user_data),
             Err(_) => {
-                return Err(ServiceError::DatabaseError(
-                    "Database error occurred".to_string(),
-                ));
+                Err(ServiceError::TokenInvalid("Token verification failed".to_string()))
             }
-        };
-
-        let mut user = match user {
-            Some(u) => u,
-            None => {
-                return Err(ServiceError::UserNotFound(format!(
-                    "No user with Id: {} found",
-                    body.user_id
-                )));
-            }
-        };
-
-        let otp_base32 = match &user.otp_secret {
-            Some(secret) => secret.clone(),
-            None => {
-                return Err(ServiceError::OtpError(
-                    "OTP not generated for this user".to_string(),
-                ));
-            }
-        };
-
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
-            Secret::Encoded(otp_base32).to_bytes().unwrap(),
-        )
-        .unwrap();
-
-        let is_valid = totp.check_current(&body.token).unwrap();
-
-        if !is_valid {
-            return Err(ServiceError::TokenInvalid(
-                "Token is invalid or user doesn't exist".to_string(),
-            ));
-        }
-
-        user.otp_enabled = Some(true);
-        user.otp_verified = Some(true);
-
-        // Update the user in the database
-        let updated_user: Option<User> = match db
-            .update(("mcp_auth", &body.user_id))
-            .content(user.clone())
-            .await
-        {
-            Ok(updated) => updated,
-            Err(_) => {
-                return Err(ServiceError::InternalError(
-                    "Failed to update user verification status".to_string(),
-                ));
-            }
-        };
-
-        match updated_user {
-            Some(u) => Ok(Self::user_to_response(&u)),
-            None => Ok(Self::user_to_response(&user)),
         }
     }
 
     pub async fn validate_otp(body: VerifyOTPSchema, data: AppState) -> Result<bool, ServiceError> {
-        // Find the user by ID
-        let user: Option<User> = match data.db.select(("mcp_auth", &body.user_id)).await {
-            Ok(user) => user,
+        let service = CqrsUserService::new(data);
+        
+        match service.validate_otp(&body).await {
+            Ok(is_valid) => Ok(is_valid),
             Err(_) => {
-                return Err(ServiceError::DatabaseError(
-                    "Database error occurred".to_string(),
-                ));
+                Err(ServiceError::TokenInvalid("Token validation failed".to_string()))
             }
-        };
-
-        let user = match user {
-            Some(u) => u,
-            None => {
-                return Err(ServiceError::UserNotFound(format!(
-                    "No user with Id: {} found",
-                    body.user_id
-                )));
-            }
-        };
-
-        if !user.otp_enabled.unwrap_or(false) {
-            return Err(ServiceError::TokenInvalid("2FA not enabled".to_string()));
         }
-
-        let otp_base32 = match &user.otp_secret {
-            Some(secret) => secret.clone(),
-            None => {
-                return Err(ServiceError::OtpError("OTP secret not found".to_string()));
-            }
-        };
-
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
-            Secret::Encoded(otp_base32).to_bytes().unwrap(),
-        )
-        .unwrap();
-
-        let is_valid = totp.check_current(&body.token).unwrap();
-
-        if !is_valid {
-            return Err(ServiceError::TokenInvalid(
-                "Token is invalid or user doesn't exist".to_string(),
-            ));
-        }
-
-        Ok(true)
     }
 
     pub async fn disable_otp(
         body: DisableOTPSchema,
         data: AppState,
     ) -> Result<UserData, ServiceError> {
-        let db = data.db.clone();
-        // Find the user by ID
-        let user: Option<User> = match data.db.select(("mcp_auth", &body.user_id)).await {
-            Ok(user) => user,
+        let service = CqrsUserService::new(data);
+        
+        match service.disable_otp(&body).await {
+            Ok(user_data) => Ok(user_data),
             Err(_) => {
-                return Err(ServiceError::DatabaseError(
-                    "Database error occurred".to_string(),
-                ));
+                Err(ServiceError::InternalError("Failed to disable OTP".to_string()))
             }
-        };
-
-        let mut user = match user {
-            Some(u) => u,
-            None => {
-                return Err(ServiceError::UserNotFound(format!(
-                    "No user with Id: {} found",
-                    body.user_id
-                )));
-            }
-        };
-
-        user.otp_enabled = Some(false);
-        user.otp_verified = Some(false);
-        user.otp_auth_url = None;
-        user.otp_secret = None;
-
-        // Update the user in the database
-        let updated_user: Option<User> = match db
-            .update(("mcp_auth", &body.user_id))
-            .content(user.clone())
-            .await
-        {
-            Ok(updated) => updated,
-            Err(_) => {
-                return Err(ServiceError::InternalError(
-                    "Failed to disable OTP for user".to_string(),
-                ));
-            }
-        };
-
-        match updated_user {
-            Some(u) => Ok(Self::user_to_response(&u)),
-            None => Ok(Self::user_to_response(&user)),
         }
     }
 

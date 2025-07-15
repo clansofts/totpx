@@ -15,7 +15,7 @@ use axum::{
 use serde_json::{Value, json};
 
 async fn health_checker_handler() -> Json<Value> {
-    const MESSAGE: &str = "How to Implement Two-Factor Authentication (2FA) in Rust";
+    const MESSAGE: &str = "CQRS-based Two-Factor Authentication (2FA) in Rust with Event Sourcing";
 
     Json(json!({"status": "success", "message": MESSAGE}))
 }
@@ -112,10 +112,10 @@ async fn disable_otp_handler(
 
 pub fn create_routes() -> Router<AppState> {
     Router::new()
-        .route("/api/auth/otp/generate", post(gen_otp_handler))
         .route("/api/healthchecker", get(health_checker_handler))
         .route("/api/auth/register", post(register_user_handler))
         .route("/api/auth/login", post(login_user_handler))
+        .route("/api/auth/otp/generate", post(gen_otp_handler))
         .route("/api/auth/otp/verify", post(verify_otp_handler))
         .route("/api/auth/otp/validate", post(validate_otp_handler))
         .route("/api/auth/otp/disable", post(disable_otp_handler))
